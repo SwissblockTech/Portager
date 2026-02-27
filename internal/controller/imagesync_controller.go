@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -31,13 +32,20 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	portagerv1alpha1 "github.com/jarodr47/portager/api/v1alpha1"
 	"github.com/jarodr47/portager/internal/controller/auth"
+	"github.com/jarodr47/portager/internal/controller/schedule"
 	"github.com/jarodr47/portager/internal/controller/sync"
 )
+
+// SyncNowAnnotation is the annotation key users set to "true" to trigger an
+// immediate sync, bypassing the cron schedule. The controller removes the
+// annotation after processing so it acts as a one-shot trigger.
+const SyncNowAnnotation = "portager.portager.io/sync-now"
 
 // ImageSyncReconciler reconciles a ImageSync object
 type ImageSyncReconciler struct {
@@ -48,6 +56,9 @@ type ImageSyncReconciler struct {
 	// In production, this writes to the API server (visible via kubectl describe).
 	// In tests, we swap in a FakeRecorder that captures events in a Go channel.
 	Recorder record.EventRecorder
+
+	// Scheduler parses cron expressions and computes the next sync time.
+	Scheduler *schedule.Scheduler
 }
 
 // +kubebuilder:rbac:groups=portager.portager.io,resources=imagesyncs,verbs=get;list;watch;create;update;patch;delete
@@ -79,7 +90,47 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"imageCount", len(imageSync.Spec.Images),
 	)
 
-	// 2. Build authenticators for source and destination registries.
+	// 2. Validate the cron schedule expression.
+	if err := r.Scheduler.Validate(imageSync.Spec.Schedule); err != nil {
+		return r.updateStatusWithError(ctx, &imageSync, "InvalidSchedule",
+			fmt.Sprintf("invalid schedule: %v", err))
+	}
+
+	// 3. Check for sync-now annotation (bypasses schedule).
+	syncNow := false
+	if imageSync.Annotations[SyncNowAnnotation] == "true" {
+		log.Info("sync-now annotation detected, bypassing schedule")
+		delete(imageSync.Annotations, SyncNowAnnotation)
+		if err := r.Update(ctx, &imageSync); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to remove sync-now annotation: %w", err)
+		}
+		// r.Update() already updates imageSync in place with the fresh
+		// ResourceVersion from the API server. Do NOT re-fetch from the
+		// informer cache here — the cache is eventually consistent and may
+		// return a stale ResourceVersion, causing a conflict on the status
+		// write later.
+		r.Recorder.Event(&imageSync, corev1.EventTypeNormal, "SyncNowTriggered",
+			"Immediate sync triggered via annotation")
+		syncNow = true
+	}
+
+	// 4. Schedule check — skip if sync-now was triggered.
+	if !syncNow {
+		if imageSync.Status.NextSyncTime != nil {
+			nextSync := imageSync.Status.NextSyncTime.Time
+			if time.Now().Before(nextSync) {
+				requeueAfter := time.Until(nextSync)
+				log.Info("Sync not due yet, requeuing",
+					"nextSyncTime", nextSync,
+					"requeueAfter", requeueAfter,
+				)
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+		}
+		// NextSyncTime is nil (first sync) or in the past (due) — proceed.
+	}
+
+	// 5. Build authenticators for source and destination registries.
 	srcAuth := r.buildSourceAuth(&imageSync)
 	dstAuth := r.buildDestAuth(&imageSync)
 
@@ -202,6 +253,16 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			Message:            fmt.Sprintf("All %d image(s) synced successfully", totalCount),
 			ObservedGeneration: imageSync.Generation,
 		})
+
+		// Calculate the next scheduled sync time. Only advance on success —
+		// on failure, leave nextSyncTime in the past so the backoff requeue
+		// re-enters reconcile and the schedule check allows a retry.
+		nextSync, err := r.Scheduler.NextSyncTime(imageSync.Spec.Schedule, now.Time)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to compute next sync time: %w", err)
+		}
+		nextSyncMeta := metav1.NewTime(nextSync)
+		imageSync.Status.NextSyncTime = &nextSyncMeta
 	} else {
 		meta.SetStatusCondition(&imageSync.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
@@ -226,7 +287,13 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, fmt.Errorf("%d image(s) failed to sync", len(copyErrors))
 	}
 
-	return ctrl.Result{}, nil
+	// Requeue for the next scheduled sync.
+	requeueAfter := time.Until(imageSync.Status.NextSyncTime.Time)
+	log.Info("Sync succeeded, requeuing for next schedule",
+		"nextSyncTime", imageSync.Status.NextSyncTime.Time,
+		"requeueAfter", requeueAfter,
+	)
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // buildSourceAuth returns an Authenticator for the source registry.
@@ -306,15 +373,42 @@ func (r *ImageSyncReconciler) updateStatusWithError(
 	return ctrl.Result{}, fmt.Errorf("%s: %s", reason, message)
 }
 
+// syncNowAnnotationPredicate triggers reconciliation when a user adds the
+// sync-now annotation. Annotation changes do NOT increment metadata.generation,
+// so GenerationChangedPredicate alone won't detect them.
+//
+// Only Update events matter: Create and Delete are handled by
+// GenerationChangedPredicate, and Generic events aren't used.
+type syncNowAnnotationPredicate struct{}
+
+func (syncNowAnnotationPredicate) Create(_ event.CreateEvent) bool   { return false }
+func (syncNowAnnotationPredicate) Delete(_ event.DeleteEvent) bool   { return false }
+func (syncNowAnnotationPredicate) Generic(_ event.GenericEvent) bool { return false }
+
+// Update returns true only when the new object has the sync-now annotation
+// set to "true" and the old object did not. This prevents matching on the
+// removal of the annotation (which the controller does after processing).
+func (syncNowAnnotationPredicate) Update(e event.UpdateEvent) bool {
+	oldAnnotations := e.ObjectOld.GetAnnotations()
+	newAnnotations := e.ObjectNew.GetAnnotations()
+	return newAnnotations[SyncNowAnnotation] == "true" && oldAnnotations[SyncNowAnnotation] != "true"
+}
+
 // SetupWithManager sets up the controller with the Manager.
 //
-// GenerationChangedPredicate ensures we only reconcile when the spec changes
-// (generation increments), NOT when we write status updates. Without this,
-// every status write triggers a re-reconcile, creating a loop.
+// Two predicates are composed with Or:
+//   - GenerationChangedPredicate: reconcile on spec changes (generation increments)
+//   - syncNowAnnotationPredicate: reconcile when sync-now annotation is added
+//
+// Status-only updates are still filtered out — they don't change generation
+// and don't add the sync-now annotation.
 func (r *ImageSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&portagerv1alpha1.ImageSync{},
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				syncNowAnnotationPredicate{},
+			))).
 		Named("imagesync").
 		Complete(r)
 }

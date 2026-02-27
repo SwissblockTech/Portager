@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -30,7 +31,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	portagerv1alpha1 "github.com/jarodr47/portager/api/v1alpha1"
+	"github.com/jarodr47/portager/internal/controller/schedule"
 )
+
+// newReconciler creates a reconciler wired with a FakeRecorder and Scheduler.
+func newReconciler(rec *record.FakeRecorder) *ImageSyncReconciler {
+	return &ImageSyncReconciler{
+		Client:    k8sClient,
+		Scheme:    k8sClient.Scheme(),
+		Recorder:  rec,
+		Scheduler: schedule.NewScheduler(),
+	}
+}
 
 var _ = Describe("ImageSync Controller", func() {
 	Context("When reconciling a resource", func() {
@@ -96,11 +108,7 @@ var _ = Describe("ImageSync Controller", func() {
 
 		It("should reconcile and update status with failure when registries are unreachable", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &ImageSyncReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: fakeRecorder,
-			}
+			controllerReconciler := newReconciler(fakeRecorder)
 
 			// In envtest there are no real registries, so the digest check will fail.
 			// The reconciler should handle this gracefully: update status with
@@ -141,11 +149,202 @@ var _ = Describe("ImageSync Controller", func() {
 			Expect(imagesync.Status.FailedImages).To(Equal(1))
 			Expect(imagesync.Status.SyncedImages).To(Equal(0))
 
+			// On failure, nextSyncTime should NOT be advanced.
+			Expect(imagesync.Status.NextSyncTime).To(BeNil())
+
 			// Verify events were emitted.
 			// Receive() reads one item from the channel and checks it against the matcher.
 			// ContainSubstring matches if the event string contains the expected text.
 			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncFailed")))
 			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncComplete")))
+		})
+	})
+
+	Context("Scheduling", func() {
+		ctx := context.Background()
+
+		It("should skip sync when nextSyncTime is in the future", func() {
+			resourceName := "test-not-due"
+			nn := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			resource := &portagerv1alpha1.ImageSync{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: portagerv1alpha1.ImageSyncSpec{
+					Schedule: "@every 1h",
+					Source:   portagerv1alpha1.SourceConfig{Registry: "fake-registry.invalid"},
+					Destination: portagerv1alpha1.DestinationConfig{
+						Registry: "localhost:5000",
+						Auth:     portagerv1alpha1.AuthConfig{Method: "secret"},
+					},
+					Images: []portagerv1alpha1.ImageSpec{
+						{Name: "alpine", Tags: []string{"latest"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			// Set nextSyncTime 1 hour in the future via status update.
+			Expect(k8sClient.Get(ctx, nn, resource)).To(Succeed())
+			futureTime := metav1.NewTime(time.Now().Add(1 * time.Hour))
+			resource.Status.NextSyncTime = &futureTime
+			Expect(k8sClient.Status().Update(ctx, resource)).To(Succeed())
+
+			fakeRecorder := record.NewFakeRecorder(100)
+			reconciler := newReconciler(fakeRecorder)
+
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Should requeue for approximately 1 hour (allow some slack for test execution).
+			Expect(result.RequeueAfter).To(BeNumerically(">", 59*time.Minute))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", 61*time.Minute))
+
+			// No sync should have occurred — no events emitted.
+			Expect(fakeRecorder.Events).To(HaveLen(0))
+
+			// Cleanup.
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("should sync when nextSyncTime is in the past", func() {
+			resourceName := "test-past-due"
+			nn := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			resource := &portagerv1alpha1.ImageSync{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: portagerv1alpha1.ImageSyncSpec{
+					Schedule: "@every 1h",
+					Source:   portagerv1alpha1.SourceConfig{Registry: "fake-registry.invalid"},
+					Destination: portagerv1alpha1.DestinationConfig{
+						Registry: "localhost:5000",
+						Auth:     portagerv1alpha1.AuthConfig{Method: "secret"},
+					},
+					Images: []portagerv1alpha1.ImageSpec{
+						{Name: "alpine", Tags: []string{"latest"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			// Set nextSyncTime 1 hour in the past — sync is overdue.
+			Expect(k8sClient.Get(ctx, nn, resource)).To(Succeed())
+			pastTime := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+			resource.Status.NextSyncTime = &pastTime
+			Expect(k8sClient.Status().Update(ctx, resource)).To(Succeed())
+
+			fakeRecorder := record.NewFakeRecorder(100)
+			reconciler := newReconciler(fakeRecorder)
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			// With fake registry, sync will fail — but it should have ATTEMPTED.
+			Expect(err).To(HaveOccurred())
+
+			// Verify sync was attempted by checking for events.
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncFailed")))
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncComplete")))
+
+			// Cleanup.
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("should sync immediately when sync-now annotation is set", func() {
+			resourceName := "test-sync-now"
+			nn := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			// Set nextSyncTime far in the future, but add the sync-now annotation.
+			resource := &portagerv1alpha1.ImageSync{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+					Annotations: map[string]string{
+						SyncNowAnnotation: "true",
+					},
+				},
+				Spec: portagerv1alpha1.ImageSyncSpec{
+					Schedule: "@every 1h",
+					Source:   portagerv1alpha1.SourceConfig{Registry: "fake-registry.invalid"},
+					Destination: portagerv1alpha1.DestinationConfig{
+						Registry: "localhost:5000",
+						Auth:     portagerv1alpha1.AuthConfig{Method: "secret"},
+					},
+					Images: []portagerv1alpha1.ImageSpec{
+						{Name: "alpine", Tags: []string{"latest"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			// Set nextSyncTime far in the future.
+			Expect(k8sClient.Get(ctx, nn, resource)).To(Succeed())
+			futureTime := metav1.NewTime(time.Now().Add(24 * time.Hour))
+			resource.Status.NextSyncTime = &futureTime
+			Expect(k8sClient.Status().Update(ctx, resource)).To(Succeed())
+
+			fakeRecorder := record.NewFakeRecorder(100)
+			reconciler := newReconciler(fakeRecorder)
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			// Sync should be attempted despite future nextSyncTime.
+			Expect(err).To(HaveOccurred()) // fake registry fails
+
+			// Verify the sync-now annotation was removed.
+			Expect(k8sClient.Get(ctx, nn, resource)).To(Succeed())
+			Expect(resource.Annotations[SyncNowAnnotation]).To(BeEmpty())
+
+			// Verify sync was attempted (SyncNowTriggered + SyncFailed events).
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncNowTriggered")))
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncFailed")))
+			Expect(fakeRecorder.Events).To(Receive(ContainSubstring("SyncComplete")))
+
+			// Cleanup.
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("should reject invalid schedule expressions", func() {
+			resourceName := "test-invalid-schedule"
+			nn := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			resource := &portagerv1alpha1.ImageSync{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: portagerv1alpha1.ImageSyncSpec{
+					Schedule: "not-a-valid-cron",
+					Source:   portagerv1alpha1.SourceConfig{Registry: "fake-registry.invalid"},
+					Destination: portagerv1alpha1.DestinationConfig{
+						Registry: "localhost:5000",
+						Auth:     portagerv1alpha1.AuthConfig{Method: "secret"},
+					},
+					Images: []portagerv1alpha1.ImageSpec{
+						{Name: "alpine", Tags: []string{"latest"}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			fakeRecorder := record.NewFakeRecorder(100)
+			reconciler := newReconciler(fakeRecorder)
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("InvalidSchedule"))
+
+			// Verify Ready condition is False with InvalidSchedule reason.
+			Expect(k8sClient.Get(ctx, nn, resource)).To(Succeed())
+			readyCond := meta.FindStatusCondition(resource.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("InvalidSchedule"))
+
+			// Cleanup.
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 	})
 })
