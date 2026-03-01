@@ -125,7 +125,7 @@ Portage supports multiple authentication strategies through a pluggable interfac
 
 ## Project Status
 
-Portage is under active development. The core reconciliation loop, image copy engine, digest-based skip logic, per-image status reporting, and Kubernetes event emission are implemented and tested. Scheduling, cloud-native authentication (ECR/GCR), and platform filtering are in progress.
+Portage is under active development. The core reconciliation loop, image copy engine, digest-based skip logic, per-image status reporting, Kubernetes event emission, and cron-based scheduling are implemented and tested. Cloud-native authentication (ECR/GCR) and platform filtering are in progress.
 
 This project is not yet packaged for production deployment. See the [development phases](#development-phases) below for current progress.
 
@@ -136,7 +136,7 @@ This project is not yet packaged for production deployment. See the [development
 | 0 | Project scaffolding, CRD types, minimal reconciler | Complete |
 | 1 | Single image copy with pluggable auth (Secret + Anonymous) | Complete |
 | 2 | Digest comparison, per-image status, Kubernetes Events | Complete |
-| 3 | Cron-based scheduling with `RequeueAfter` | Planned |
+| 3 | Cron-based scheduling with `RequeueAfter`, sync-now annotation | Complete |
 | 4 | ECR authentication (IRSA), destination repo creation | Planned |
 | 5 | Multi-arch platform filtering | Planned |
 | 6 | Prometheus metrics, Helm chart, leader election | Planned |
