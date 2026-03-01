@@ -1,0 +1,8 @@
+apiVersion: v2
+name: portager
+description: Kubernetes operator for declarative registry-to-registry image sync
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: jarodr47

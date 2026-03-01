@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- Container blue -->
+    <linearGradient id="containerBlue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4A9EF7"/>
+      <stop offset="100%" stop-color="#326CE5"/>
+    </linearGradient>
+    <!-- Figure teal -->
+    <linearGradient id="figureTeal" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3EC6B0"/>
+      <stop offset="100%" stop-color="#2BA893"/>
+    </linearGradient>
+  </defs>
+
+  <!-- === FIGURE — friendly portager character === -->
+  <!-- Body (rounded, friendly torso) -->
+  <path d="M108 130 
+           C108 115, 118 105, 128 105 
+           C138 105, 148 115, 148 130 
+           L148 170 
+           C148 175, 145 178, 140 178 
+           L116 178 
+           C111 178, 108 175, 108 170 Z" 
+        fill="url(#figureTeal)"/>
+
+  <!-- Head -->
+  <circle cx="128" cy="88" r="20" fill="url(#figureTeal)"/>
+  
+  <!-- Friendly face — simple dots and smile like CNCF mascots -->
+  <circle cx="121" cy="85" r="2.5" fill="#1A5C50"/>
+  <circle cx="135" cy="85" r="2.5" fill="#1A5C50"/>
+  <path d="M121 94 Q128 100, 135 94" stroke="#1A5C50" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+
+  <!-- Left arm (reaching up to hold container) -->
+  <path d="M108 120 L88 85 L88 68" stroke="url(#figureTeal)" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Right arm -->
+  <path d="M148 120 L168 85 L168 68" stroke="url(#figureTeal)" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Left leg (walking) -->
+  <path d="M118 178 L104 215" stroke="url(#figureTeal)" stroke-width="10" fill="none" stroke-linecap="round"/>
+  <!-- Left foot -->
+  <ellipse cx="100" cy="218" rx="10" ry="5" fill="#2BA893"/>
+  
+  <!-- Right leg -->
+  <path d="M138 178 L152 215" stroke="url(#figureTeal)" stroke-width="10" fill="none" stroke-linecap="round"/>
+  <!-- Right foot -->
+  <ellipse cx="156" cy="218" rx="10" ry="5" fill="#2BA893"/>
+
+  <!-- === SHIPPING CONTAINER (carried overhead) === -->
+  <g>
+    <!-- Main container body — rounded rect for friendly feel -->
+    <rect x="72" y="28" width="112" height="42" rx="6" fill="url(#containerBlue)" stroke="#2A5DB8" stroke-width="1.5"/>
+    
+    <!-- Container ridges -->
+    <line x1="100" y1="28" x2="100" y2="70" stroke="#2A5DB8" stroke-width="1.2" stroke-opacity="0.5"/>
+    <line x1="128" y1="28" x2="128" y2="70" stroke="#2A5DB8" stroke-width="1.2" stroke-opacity="0.5"/>
+    <line x1="156" y1="28" x2="156" y2="70" stroke="#2A5DB8" stroke-width="1.2" stroke-opacity="0.5"/>
+
+    <!-- Kubernetes helm wheel on the container -->
+    <g transform="translate(128, 49)" fill="none" stroke="white" stroke-width="1.8" stroke-opacity="0.9">
+      <circle cx="0" cy="0" r="10"/>
+      <circle cx="0" cy="0" r="3.2"/>
+      <!-- 7 spokes like the real K8s logo -->
+      <line x1="0" y1="-10" x2="0" y2="-3.8" stroke-linecap="round"/>
+      <line x1="0" y1="3.8" x2="0" y2="10" stroke-linecap="round"/>
+      <line x1="-10" y1="0" x2="-3.8" y2="0" stroke-linecap="round"/>
+      <line x1="3.8" y1="0" x2="10" y2="0" stroke-linecap="round"/>
+      <line x1="-7.1" y1="-7.1" x2="-2.7" y2="-2.7" stroke-linecap="round"/>
+      <line x1="2.7" y1="2.7" x2="7.1" y2="7.1" stroke-linecap="round"/>
+      <line x1="-7.1" y1="7.1" x2="-2.7" y2="2.7" stroke-linecap="round"/>
+      <line x1="2.7" y1="-2.7" x2="7.1" y2="-7.1" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- === MOTION LINES (subtle, showing movement/carrying direction) === -->
+  <line x1="52" y1="48" x2="38" y2="48" stroke="#326CE5" stroke-width="2.5" stroke-linecap="round" stroke-opacity="0.35"/>
+  <line x1="56" y1="58" x2="40" y2="58" stroke="#326CE5" stroke-width="2" stroke-linecap="round" stroke-opacity="0.25"/>
+  <line x1="54" y1="38" x2="42" y2="38" stroke="#326CE5" stroke-width="2" stroke-linecap="round" stroke-opacity="0.25"/>
+</svg>

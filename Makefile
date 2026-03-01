@@ -102,6 +102,16 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+##@ Helm
+
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart
+	helm lint helm/portager/
+
+.PHONY: helm-template
+helm-template: ## Render Helm chart templates locally
+	helm template portager helm/portager/
+
 ##@ Build
 
 .PHONY: build

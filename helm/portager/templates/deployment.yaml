@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "portager.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "portager.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "portager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "portager.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "portager.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: manager
+          image: {{ include "portager.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --health-probe-bind-address=:8081
+            {{- if .Values.leaderElection.enabled }}
+            - --leader-elect
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - --metrics-bind-address=:8443
+            - --metrics-secure=true
+            {{- else }}
+            - --metrics-bind-address=0
+            {{- end }}
+          ports:
+            {{- if .Values.metrics.enabled }}
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+            {{- end }}
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          {{- if .Values.aws.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.aws.existingSecret }}
+          {{- end }}
+          {{- if .Values.aws.credentials.enabled }}
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ .Values.aws.credentials.accessKeyId | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ .Values.aws.credentials.secretAccessKey | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.aws.credentials.region | quote }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

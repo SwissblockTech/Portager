@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 
 	portagerv1alpha1 "github.com/jarodr47/portager/api/v1alpha1"
 	"github.com/jarodr47/portager/internal/controller/auth"
+	portageMetrics "github.com/jarodr47/portager/internal/controller/metrics"
 	"github.com/jarodr47/portager/internal/controller/registry"
 	"github.com/jarodr47/portager/internal/controller/schedule"
 	"github.com/jarodr47/portager/internal/controller/sync"
@@ -76,6 +78,7 @@ type ImageSyncReconciler struct {
 // images that are already up-to-date in the destination.
 func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	reconcileStart := time.Now()
 
 	// 1. Fetch the ImageSync resource that triggered this reconciliation.
 	var imageSync portagerv1alpha1.ImageSync
@@ -225,6 +228,7 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				log.Error(err, "Failed to get source digest", "source", srcRef)
 				r.Recorder.Eventf(&imageSync, corev1.EventTypeWarning, "SyncFailed",
 					"Failed to get source digest for %s: %v", srcRef, err)
+				portageMetrics.ImagesFailed.WithLabelValues(imageSync.Name, imageSync.Namespace).Inc()
 				imageStatus.Tags = append(imageStatus.Tags, tagStatus)
 				continue
 			}
@@ -242,6 +246,7 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					"image", srcRef, "digest", srcDigest)
 				r.Recorder.Eventf(&imageSync, corev1.EventTypeNormal, "ImageSkipped",
 					"Image %s already up-to-date (digest: %s)", srcRef, truncateDigest(srcDigest))
+				portageMetrics.ImagesSkipped.WithLabelValues(imageSync.Name, imageSync.Namespace).Inc()
 				imageStatus.Tags = append(imageStatus.Tags, tagStatus)
 				continue
 			}
@@ -255,6 +260,7 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				log.Error(err, "Failed to copy image", "source", srcRef, "destination", dstRef)
 				r.Recorder.Eventf(&imageSync, corev1.EventTypeWarning, "SyncFailed",
 					"Failed to copy %s to %s: %v", srcRef, dstRef, err)
+				portageMetrics.ImagesFailed.WithLabelValues(imageSync.Name, imageSync.Namespace).Inc()
 			} else {
 				syncedCount++
 				tagStatus.Synced = true
@@ -262,6 +268,7 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					"digest", srcDigest)
 				r.Recorder.Eventf(&imageSync, corev1.EventTypeNormal, "ImageSynced",
 					"Synced %s → %s (digest: %s)", srcRef, dstRef, truncateDigest(srcDigest))
+				portageMetrics.ImagesCopied.WithLabelValues(imageSync.Name, imageSync.Namespace).Inc()
 			}
 
 			imageStatus.Tags = append(imageStatus.Tags, tagStatus)
@@ -323,6 +330,18 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Emit a summary event.
 	r.Recorder.Eventf(&imageSync, corev1.EventTypeNormal, "SyncComplete",
 		"Sync complete: %d synced, %d failed, %d total", syncedCount, failedCount, totalCount)
+
+	// Record Prometheus metrics.
+	portageMetrics.SyncDuration.WithLabelValues(imageSync.Name, imageSync.Namespace).Observe(time.Since(reconcileStart).Seconds())
+	syncStatus := "success"
+	if len(copyErrors) > 0 {
+		syncStatus = "failure"
+	}
+	portageMetrics.SyncTotal.WithLabelValues(imageSync.Name, imageSync.Namespace, syncStatus).Inc()
+	portageMetrics.ImageInfo.WithLabelValues(
+		imageSync.Name, imageSync.Namespace,
+		strconv.Itoa(syncedCount), strconv.Itoa(failedCount), strconv.Itoa(totalCount),
+	).Set(1)
 
 	// If any copies failed, return an error so controller-runtime requeues
 	// with backoff. Update status first so the user can see what failed.

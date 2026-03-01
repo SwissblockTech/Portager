@@ -1,0 +1,39 @@
+image:
+  repository: ghcr.io/jarodr47/portager
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+leaderElection:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false  # requires Prometheus Operator CRDs
+
+serviceAccount:
+  create: true
+  name: ""  # defaults to release fullname
+  annotations: {}
+  # For EKS IRSA:
+  # eks.amazonaws.com/role-arn: arn:aws:iam::role/portager-ecr-role
+
+aws:
+  # For non-EKS clusters: inject AWS credentials as env vars
+  credentials:
+    enabled: false
+    accessKeyId: ""
+    secretAccessKey: ""
+    region: "us-east-1"
+  # Reference an existing Secret containing AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+  existingSecret: ""

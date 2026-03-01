@@ -1,0 +1,40 @@
+Portager has been installed!
+
+1. Check the controller is running:
+
+   kubectl get pods -n {{ .Release.Namespace }} -l control-plane=controller-manager
+
+2. Apply an ImageSync resource to start syncing images:
+
+   cat <<EOF | kubectl apply -f -
+   apiVersion: portager.portager.io/v1alpha1
+   kind: ImageSync
+   metadata:
+     name: example
+     namespace: default
+   spec:
+     schedule: "@every 1h"
+     source:
+       registry: docker.io/library
+     destination:
+       registry: your-registry.example.com
+       auth:
+         method: secret
+         secretRef:
+           name: your-registry-creds
+     images:
+       - name: alpine
+         tags: ["latest"]
+   EOF
+
+3. Check sync status:
+
+   kubectl get imagesync
+   kubectl describe imagesync example
+{{- if .Values.metrics.enabled }}
+
+4. Metrics are available on port 8443 (HTTPS).
+{{- if .Values.metrics.serviceMonitor.enabled }}
+   A ServiceMonitor has been created for Prometheus scraping.
+{{- end }}
+{{- end }}
