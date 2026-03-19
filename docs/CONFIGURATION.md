@@ -207,7 +207,7 @@ When `networkPolicy.enabled` is set to `true`, a Kubernetes `NetworkPolicy` is c
 
 **All other traffic is denied** when the policy is active.
 
-> **Note:** Network policies require a CNI plugin that supports them (e.g., Calico, Cilium, Weave Net). The default Kubernetes CNI (kubenet) and Kind's default CNI do not enforce NetworkPolicy rules. This feature is disabled by default for compatibility.
+> **Note:** Network policies require a CNI plugin that supports them (e.g., Calico, Cilium, Weave Net). Not all CNI plugins enforce NetworkPolicy rules. This feature is disabled by default for compatibility.
 
 ---
 
