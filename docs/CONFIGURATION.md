@@ -23,7 +23,7 @@ For deployment walkthroughs, see the [Deploy Guide](DEPLOY_README.md). For a pro
 | `metrics.serviceMonitor.enabled` | `false` | Create a Prometheus `ServiceMonitor` (requires Prometheus Operator) |
 | `serviceAccount.create` | `true` | Create a ServiceAccount |
 | `serviceAccount.name` | `""` | Override ServiceAccount name (defaults to release fullname) |
-| `serviceAccount.annotations` | `{}` | Annotations (e.g., `eks.amazonaws.com/role-arn` for IRSA) |
+| `serviceAccount.annotations` | `{}` | Annotations (e.g., `eks.amazonaws.com/role-arn` for IRSA, `iam.gke.io/gcp-service-account` for GKE Workload Identity) |
 | `aws.credentials.enabled` | `false` | Inject AWS credentials as env vars (for non-EKS clusters) |
 | `aws.credentials.accessKeyId` | `""` | AWS access key ID |
 | `aws.credentials.secretAccessKey` | `""` | AWS secret access key |
@@ -57,13 +57,15 @@ Portager supports multiple authentication strategies through a pluggable interfa
 
 | Method | Use Case | Configuration |
 |---|---|---|
-| **Anonymous (source)** | Public source registries (Docker Hub, Quay, GHCR public) | Omit `spec.source.authSecretRef` |
+| **Anonymous (source)** | Public source registries (Docker Hub, Quay, GHCR public) | Omit `spec.source.authSecretRef` and `spec.source.authMethod` |
 | **Anonymous (destination, explicit)** | Public/local registries with no auth | `spec.destination.auth.method: anonymous` |
 | **Anonymous (destination, legacy)** | Backward-compatible anonymous auth | `spec.destination.auth.method: secret` with no `secretRef` |
 | **Kubernetes Secret** | Any registry with username/password or token auth | `spec.source.authSecretRef` or `spec.destination.auth.secretRef` referencing a `kubernetes.io/dockerconfigjson` Secret |
-| **ECR (IRSA / IAM)** | Amazon ECR | `spec.destination.auth.method: ecr` — uses the AWS credential chain (IRSA, env vars, instance profile) |
+| **ECR (IRSA / IAM)** | Amazon ECR destination | `spec.destination.auth.method: ecr` — uses the AWS credential chain (IRSA, env vars, instance profile) |
+| **GAR (Workload Identity / ADC)** | Google Artifact Registry source | `spec.source.authMethod: gar` — uses Application Default Credentials |
+| **GAR (Workload Identity / ADC)** | Google Artifact Registry destination | `spec.destination.auth.method: gar` — uses Application Default Credentials |
 
-> **Note:** For source registries, anonymous auth is the default when `authSecretRef` is omitted. For destination registries, `auth.method` is required by the CRD. Use `method: anonymous` for unauthenticated destinations (recommended). `method: secret` without a `secretRef` still works for backward compatibility but `method: anonymous` is the preferred explicit approach.
+> **Note:** For source registries, anonymous auth is the default when `authSecretRef` is omitted and `authMethod` is unset. For destination registries, `auth.method` is required by the CRD. Use `method: anonymous` for unauthenticated destinations (recommended). `method: secret` without a `secretRef` still works for backward compatibility but `method: anonymous` is the preferred explicit approach.
 
 ### AWS Credential Strategies
 
@@ -138,6 +140,76 @@ kubectl set env deployment/portager-controller-manager -n portager-system \
   AWS_REGION=us-east-1
 ```
 
+### GCP Credential Strategies
+
+For GAR sources or destinations, Portager uses Application Default Credentials (ADC). The credential chain is:
+
+1. `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a service account key file
+2. GKE Workload Identity (via instance metadata server) — recommended for production
+3. `gcloud auth application-default login` (local development only)
+
+#### GKE with Workload Identity (recommended for production)
+
+Workload Identity binds a Kubernetes service account to a GCP service account, providing short-lived credentials with no key files in the cluster.
+
+**Required GCP IAM roles:**
+
+| Operation | Role |
+|---|---|
+| Pull from GAR source | `roles/artifactregistry.reader` |
+| Push to GAR destination | `roles/artifactregistry.writer` |
+
+```bash
+# 1. Enable Workload Identity on your GKE cluster (if not already enabled)
+gcloud container clusters update <CLUSTER_NAME> \
+  --workload-pool=<PROJECT_ID>.svc.id.goog
+
+# 2. Create a GCP service account for Portager
+gcloud iam service-accounts create portager \
+  --display-name="Portager image sync"
+
+# 3. Grant the required GAR role(s)
+gcloud projects add-iam-policy-binding <PROJECT_ID> \
+  --member="serviceAccount:portager@<PROJECT_ID>.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+
+# 4. Allow the Kubernetes service account to impersonate the GCP service account
+gcloud iam service-accounts add-iam-policy-binding \
+  portager@<PROJECT_ID>.iam.gserviceaccount.com \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:<PROJECT_ID>.svc.id.goog[portager-system/portager-controller-manager]"
+
+# 5. Install Portager with the Workload Identity annotation on the service account
+helm install portager oci://ghcr.io/jarodr47/portager/charts/portager \
+  -n portager-system --create-namespace \
+  --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"=portager@<PROJECT_ID>.iam.gserviceaccount.com
+```
+
+#### Non-GKE clusters (service account key file)
+
+For clusters without Workload Identity support, inject a service account key as an environment variable or volume:
+
+```bash
+# Create a key file for the service account
+gcloud iam service-accounts keys create key.json \
+  --iam-account=portager@<PROJECT_ID>.iam.gserviceaccount.com
+
+# Store the key as a Kubernetes Secret
+kubectl create secret generic gcp-key -n portager-system \
+  --from-file=key.json=key.json
+
+# Mount the key and set GOOGLE_APPLICATION_CREDENTIALS
+helm install portager oci://ghcr.io/jarodr47/portager/charts/portager \
+  -n portager-system --create-namespace \
+  --set extraEnv[0].name=GOOGLE_APPLICATION_CREDENTIALS \
+  --set extraEnv[0].value=/var/secrets/google/key.json \
+  --set extraVolumes[0].name=gcp-key \
+  --set extraVolumes[0].secret.secretName=gcp-key \
+  --set extraVolumeMounts[0].name=gcp-key \
+  --set extraVolumeMounts[0].mountPath=/var/secrets/google \
+  --set extraVolumeMounts[0].readOnly=true
+```
+
 ---
 
 ## ImageSync Spec Reference
@@ -151,14 +223,15 @@ spec:
   schedule: "0 */6 * * *"          # Cron expression or @every shorthand
   source:
     registry: cgr.dev/my-org       # Source registry
-    authSecretRef:                  # Optional: for private source registries
+    authSecretRef:                  # Optional: for private source registries (secret-based auth)
       name: source-creds
       namespace: default           # Optional: defaults to ImageSync namespace
+    authMethod: gar                # Optional: "gar" for Google Artifact Registry (ADC/Workload Identity)
   destination:
     registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com
     auth:
-      method: ecr                  # "ecr", "secret", or "anonymous"
-      secretRef:                   # Optional: omit for anonymous dest auth
+      method: ecr                  # "ecr", "gar", "secret", or "anonymous"
+      secretRef:                   # Optional: required when method is "secret"
         name: dest-creds
     repositoryPrefix: mirror       # Optional: images land under mirror/<name>
   createDestinationRepos: true     # Optional: auto-create ECR repos

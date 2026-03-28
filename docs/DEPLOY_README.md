@@ -2,11 +2,12 @@
 
 This guide walks through deploying Portager on Kubernetes clusters. Three deployment paths are covered:
 
-| Path | Cluster | AWS Auth | Best For |
+| Path | Cluster | Registry Auth | Best For |
 |---|---|---|---|
-| [A: Kind + Helm](#path-a-kind-cluster-with-helm) | Kind (local) | IAM credentials via env vars | Local development and testing |
-| [B: EKS + Helm with IRSA](#path-b-eks-with-irsa) | EKS | IRSA (no secrets in cluster) | Production |
-| [C: Non-EKS + Helm](#path-c-non-eks-clusters) | GKE, AKS, self-managed | IAM credentials via Helm values or Secret | Any non-EKS Kubernetes cluster pushing to ECR |
+| [A: Kind + Helm](#path-a-kind-cluster-with-helm) | Kind (local) | AWS IAM credentials via env vars | Local development and testing |
+| [B: EKS + Helm with IRSA](#path-b-eks-with-irsa) | EKS | IRSA (no secrets in cluster) | Production (ECR) |
+| [C: Non-EKS + Helm](#path-c-non-eks-clusters) | GKE, AKS, self-managed | AWS IAM credentials via Helm values or Secret | Non-EKS clusters pushing to ECR |
+| [D: GKE + Workload Identity](#path-d-gke-with-workload-identity) | GKE | GKE Workload Identity (no key files) | Production (Google Artifact Registry) |
 
 All paths use the Helm chart. For Kustomize-based deployment, see the [Kustomize](#alternative-kustomize-deployment) section at the bottom.
 
@@ -313,6 +314,113 @@ spec:
 
 ---
 
+## Path D: GKE with Workload Identity
+
+Portager uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials) for Google Artifact Registry. On GKE, Workload Identity is the recommended approach — no key files or secrets are stored in the cluster.
+
+### 1. Enable Workload Identity on your cluster
+
+```bash
+gcloud container clusters update <CLUSTER_NAME> \
+  --workload-pool=<PROJECT_ID>.svc.id.goog \
+  --region <REGION>
+```
+
+> Skip this step if Workload Identity is already enabled on your cluster.
+
+### 2. Create a GCP service account for Portager
+
+```bash
+gcloud iam service-accounts create portager \
+  --project=<PROJECT_ID> \
+  --display-name="Portager image sync"
+```
+
+### 3. Grant Artifact Registry permissions
+
+```bash
+# For pushing to GAR destinations:
+gcloud projects add-iam-policy-binding <PROJECT_ID> \
+  --member="serviceAccount:portager@<PROJECT_ID>.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+
+# If also pulling from a private GAR source, add reader on the source project:
+# gcloud projects add-iam-policy-binding <SOURCE_PROJECT_ID> \
+#   --member="serviceAccount:portager@<PROJECT_ID>.iam.gserviceaccount.com" \
+#   --role="roles/artifactregistry.reader"
+```
+
+### 4. Allow the Kubernetes service account to impersonate the GCP service account
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  portager@<PROJECT_ID>.iam.gserviceaccount.com \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:<PROJECT_ID>.svc.id.goog[portager-system/portager-controller-manager]"
+```
+
+### 5. Install Portager with the Workload Identity annotation
+
+```bash
+helm install portager oci://ghcr.io/jarodr47/portager/charts/portager \
+  -n portager-system --create-namespace \
+  --set "serviceAccount.annotations.iam\.gke\.io/gcp-service-account=portager@<PROJECT_ID>.iam.gserviceaccount.com"
+```
+
+### 6. Apply a GAR ImageSync
+
+```yaml
+# gar-to-gar.yaml
+apiVersion: portager.portager.io/v1alpha1
+kind: ImageSync
+metadata:
+  name: gar-to-gar
+  namespace: default
+spec:
+  schedule: "@every 6h"
+  source:
+    # Pull from a GAR registry using Workload Identity
+    registry: us-central1-docker.pkg.dev/<SOURCE_PROJECT>/source-repo
+    authMethod: gar
+  destination:
+    # Push to a GAR registry using Workload Identity
+    registry: us-central1-docker.pkg.dev/<PROJECT_ID>/mirror
+    auth:
+      method: gar
+  images:
+    - name: myapp
+      tags: ["latest", "v1.0"]
+    - name: myservice
+      semver: "^2.0.0"
+```
+
+```bash
+kubectl apply -f gar-to-gar.yaml
+```
+
+### 7. Watch the reconciliation
+
+```bash
+kubectl describe imagesync gar-to-gar
+# Events:
+#   ImageSynced  - Synced us-central1-docker.pkg.dev/.../myapp:latest -> mirror (digest: sha256:...)
+#   SyncComplete - Sync complete: 2 synced, 0 failed, 2 total
+
+kubectl get imagesync gar-to-gar -o jsonpath='{.status}' | jq .
+```
+
+### 8. Cleanup
+
+```bash
+kubectl delete imagesync --all
+helm uninstall portager -n portager-system
+kubectl delete crd imagesyncs.portager.portager.io
+kubectl delete ns portager-system
+gcloud iam service-accounts delete portager@<PROJECT_ID>.iam.gserviceaccount.com
+```
+
+---
+
 ## Enabling Prometheus Metrics
 
 Portager exposes custom metrics on `:8443/metrics` (HTTPS). To enable automatic scraping with the Prometheus Operator:
@@ -327,6 +435,8 @@ This creates a `ServiceMonitor` that Prometheus will discover automatically. See
 ---
 
 ## Private Source Registries
+
+**Kubernetes Secret (username/password):**
 
 For private source registries (e.g., Chainguard `cgr.dev`), create a pull secret and reference it in the ImageSync:
 
@@ -343,6 +453,17 @@ spec:
     registry: cgr.dev/my-org
     authSecretRef:
       name: chainguard-pull-secret
+```
+
+**Google Artifact Registry with Workload Identity:**
+
+For private GAR source registries, use `authMethod: gar` instead of a Secret. No `authSecretRef` is needed — credentials come from ADC/Workload Identity:
+
+```yaml
+spec:
+  source:
+    registry: us-central1-docker.pkg.dev/my-project/my-repo
+    authMethod: gar
 ```
 
 ---
@@ -453,6 +574,7 @@ See `config/samples/` for ready-to-use examples:
 
 - `portager_v1alpha1_imagesync.yaml` — Docker Hub to local registry (no auth)
 - `portager_v1alpha1_imagesync_ecr.yaml` — Chainguard to ECR with IRSA and repo creation
+- `portager_v1alpha1_imagesync_gar.yaml` — GAR to GAR with GKE Workload Identity
 
 ---
 

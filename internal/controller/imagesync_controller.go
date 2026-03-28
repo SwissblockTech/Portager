@@ -430,8 +430,14 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // buildSourceAuth returns an Authenticator for the source registry.
-// If no authSecretRef is configured, returns anonymous (for public registries).
+// If authMethod is "gar", uses ADC/Workload Identity for Google Artifact Registry.
+// If authSecretRef is set, uses Secret-based auth.
+// Otherwise returns anonymous (for public registries).
 func (r *ImageSyncReconciler) buildSourceAuth(is *portagerv1alpha1.ImageSync) auth.Authenticator {
+	if is.Spec.Source.AuthMethod == "gar" {
+		return &auth.GARAuthenticator{Registry: is.Spec.Source.Registry}
+	}
+
 	if is.Spec.Source.AuthSecretRef == nil {
 		return &auth.AnonymousAuthenticator{}
 	}
@@ -476,6 +482,8 @@ func (r *ImageSyncReconciler) buildDestAuth(ctx context.Context, is *portagerv1a
 			return nil, fmt.Errorf("loading AWS config: %w", err)
 		}
 		return &auth.ECRAuthenticator{Client: ecr.NewFromConfig(cfg)}, nil
+	case "gar":
+		return &auth.GARAuthenticator{Registry: is.Spec.Destination.Registry}, nil
 	case "anonymous":
 		return &auth.AnonymousAuthenticator{}, nil
 	}

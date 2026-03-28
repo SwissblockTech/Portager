@@ -40,17 +40,27 @@ type SourceConfig struct {
 	Registry string `json:"registry"`
 
 	// authSecretRef references a kubernetes.io/dockerconfigjson Secret for pull authentication.
-	// Omit for public registries.
+	// Omit for public registries or when using authMethod.
 	// +optional
 	AuthSecretRef *SecretReference `json:"authSecretRef,omitempty"`
+
+	// authMethod specifies the authentication strategy for the source registry.
+	// "gar" uses Application Default Credentials / GKE Workload Identity for
+	// Google Artifact Registry. When unset, anonymous or secret-based auth is
+	// used depending on whether authSecretRef is set.
+	// +kubebuilder:validation:Enum=gar
+	// +optional
+	AuthMethod string `json:"authMethod,omitempty"`
 }
 
 // AuthConfig defines how the controller authenticates to the destination registry.
 type AuthConfig struct {
 	// method specifies the authentication strategy.
 	// "secret" uses a dockerconfigjson Secret; "ecr" uses IRSA for AWS ECR;
-	// "anonymous" explicitly disables authentication for public/local registries.
-	// +kubebuilder:validation:Enum=secret;ecr;anonymous
+	// "gar" uses Application Default Credentials / GKE Workload Identity for
+	// Google Artifact Registry; "anonymous" explicitly disables authentication
+	// for public/local registries.
+	// +kubebuilder:validation:Enum=secret;ecr;gar;anonymous
 	// +kubebuilder:validation:Required
 	Method string `json:"method"`
 
