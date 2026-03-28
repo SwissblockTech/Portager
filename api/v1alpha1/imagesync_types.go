@@ -113,6 +113,57 @@ type ImageSyncSpec struct {
 	// destination repositories before pushing (currently ECR only).
 	// +optional
 	CreateDestinationRepos bool `json:"createDestinationRepos,omitempty"`
+
+	// validation configures optional pre-sync validation gates (cosign, vulnerability).
+	// When nil, no validation is performed.
+	// +optional
+	Validation *ValidationConfig `json:"validation,omitempty"`
+}
+
+// ValidationConfig configures pre-sync validation gates.
+type ValidationConfig struct {
+	// cosign configures cosign signature verification.
+	// +optional
+	Cosign *CosignConfig `json:"cosign,omitempty"`
+
+	// vulnerabilityGate configures vulnerability severity gating.
+	// +optional
+	VulnerabilityGate *VulnerabilityGateConfig `json:"vulnerabilityGate,omitempty"`
+}
+
+// CosignConfig configures cosign signature verification for source images.
+type CosignConfig struct {
+	// enabled activates cosign signature verification.
+	Enabled bool `json:"enabled"`
+
+	// publicKey is a PEM-encoded cosign public key for key-based verification.
+	// When empty, keyless verification is used (requires keylessIssuer).
+	// +optional
+	PublicKey string `json:"publicKey,omitempty"`
+
+	// keylessIssuer is the OIDC issuer for keyless (Fulcio) verification.
+	// Required when publicKey is empty and enabled is true.
+	// +optional
+	KeylessIssuer string `json:"keylessIssuer,omitempty"`
+}
+
+// VulnerabilityGateConfig configures severity-based gating using OCI attestation SARIF reports.
+type VulnerabilityGateConfig struct {
+	// enabled activates vulnerability gate checking.
+	Enabled bool `json:"enabled"`
+
+	// maxSeverity is the highest severity level allowed. Images with findings
+	// at or above this level are blocked from syncing.
+	// +kubebuilder:validation:Enum=critical;high;medium;low
+	// +kubebuilder:default=critical
+	MaxSeverity string `json:"maxSeverity"`
+
+	// requireCveReport, when true (default), blocks sync if no SARIF vulnerability
+	// report is found attached to the source image. When false, images without
+	// reports are allowed through.
+	// +kubebuilder:default=true
+	// +optional
+	RequireCveReport *bool `json:"requireCveReport,omitempty"`
 }
 
 // TagSyncStatus records the result of syncing a single image tag.
@@ -135,6 +186,15 @@ type TagSyncStatus struct {
 	// error contains the failure reason if synced is false.
 	// +optional
 	Error string `json:"error,omitempty"`
+
+	// verified indicates whether pre-sync validation passed for this tag.
+	// Only meaningful when validation is configured.
+	// +optional
+	Verified bool `json:"verified,omitempty"`
+
+	// validationError contains the validation failure reason, if any.
+	// +optional
+	ValidationError string `json:"validationError,omitempty"`
 }
 
 // ImageSyncStatusImage records the sync status for all tags of a single image.

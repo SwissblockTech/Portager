@@ -12,7 +12,7 @@ Portager is a Kubernetes operator that declaratively syncs container images betw
 
 ## Current Status
 
-**Version:** v0.2.0 (released)
+**Version:** v0.2.1 (released)
 
 ### Implemented (Phases 0-4, 6 + Tier 1 + CR.1)
 - CRD types, reconciler, full sync loop
@@ -23,6 +23,7 @@ Portager is a Kubernetes operator that declaratively syncs container images betw
 - Prometheus metrics, Helm chart, leader election
 - CI: unit tests, e2e tests, multi-arch build + push, Helm OCI publish, Trivy scanning
 - Supply chain security: all GitHub Actions pinned to commit SHAs, cosign keyless image signing on tagged releases, SBOM generation (SPDX + CycloneDX) attached as OCI attestations, SLSA provenance via `provenance: mode=max`, Dependabot for automated dependency updates
+- Pre-sync validation gates: cosign signature verification (key-based and keyless), vulnerability severity gating via OCI attestation SARIF reports
 
 ### Not Implemented
 
@@ -68,7 +69,6 @@ spec:
 - **Semver tag filtering** — allow patterns like `semver: >=1.22.0 <1.23.0` that auto-discover matching tags from the source registry
 - **Webhook triggers** — endpoint for registries to call on new image push, triggering immediate sync
 - **ImageSyncPolicy** — cluster-scoped CRD for governance: org-wide defaults (destination, platforms, schedule) and policy controls (allow/deny registries, image name patterns, tag restrictions like blocking `latest`)
-- **Cosign / SBOM verification** — before copying, verify cosign signatures or check for attached SBOMs. Refuse to sync unsigned/unverified images. Aligns with supply chain security (SLSA, DoD SBOM requirements)
 - **Dry-run mode** — `spec.dryRun: true` evaluates what would sync without copying
 - **Notifications** — Slack/webhook alerts on sync failures
 
@@ -104,10 +104,14 @@ make helm-template    # Render Helm templates locally
 │   ├── metrics/                   # Prometheus metrics (portage_* custom metrics)
 │   ├── registry/                  # Registry operations (ECR repo auto-creation)
 │   ├── schedule/                  # Cron parsing via robfig/cron/v3
-│   └── sync/                      # Image copy via go-containerregistry (crane)
-│       └── copier.go              #   ImageCopier with staticKeychain
+│   ├── sync/                      # Image copy via go-containerregistry (crane)
+│   │   └── copier.go              #   ImageCopier with staticKeychain
+│   └── verify/                    # Pre-sync validation gates
+│       ├── verifier.go            #   Validator, CosignVerifier, VulnerabilityChecker interfaces
+│       ├── cosign.go              #   Cosign signature verification (key-based + keyless)
+│       └── vulnerability.go       #   SARIF-based vulnerability severity gating
 ├── config/                        # Kustomize manifests (CRDs, RBAC, manager)
-├── helm/portager/                 # Helm chart (v0.2.0)
+├── helm/portager/                 # Helm chart (v0.2.1)
 ├── test/e2e/                      # E2E tests (Kind + Ginkgo)
 ├── docs/
 │   ├── CONFIGURATION.md           # Helm values, auth strategies, spec reference
@@ -130,6 +134,7 @@ make helm-template    # Render Helm templates locally
 | go-containerregistry | 0.21.1 | OCI image operations (crane) |
 | aws-sdk-go-v2 | latest | ECR auth + repo creation |
 | robfig/cron/v3 | 3.0.1 | Cron expression parsing |
+| sigstore/cosign/v2 | 2.6.2 | Cosign signature verification |
 | Ginkgo v2 / Gomega | 2.27+ | Testing framework |
 | Kubebuilder | 4.12.0 | Scaffolding (go.kubebuilder.io/v4) |
 
@@ -163,7 +168,8 @@ Reconcile(ImageSync) →
      a. GetDigest on source (HTTP HEAD, no layer download)
      b. GetDigest on destination (may fail if not pushed yet)
      c. If digests match → skip, emit ImageSkipped event
-     d. If different/missing → crane.Copy, emit ImageSynced or SyncFailed
+     d. If validation configured → run cosign/vulnerability gates, emit ImageVerified or ValidationFailed
+     e. If different/missing → crane.Copy, emit ImageSynced or SyncFailed
   9. Update .status (conditions, per-image results, summary counts, observedGeneration)
  10. Emit SyncComplete event
  11. Requeue after next schedule interval
@@ -176,6 +182,7 @@ Reconcile(ImageSync) →
 - **`staticKeychain`** in sync/copier.go — routes credentials to the correct registry during crane.Copy (source vs destination).
 - **Pluggable auth** — `Authenticator` interface (`auth/authenticator.go`) with implementations for anonymous, secret-based, and ECR.
 - **ECR repo auto-creation** — `registry/ecr.go` calls DescribeRepositories + CreateRepository. Only ECR is supported for auto-creation; other registries create repos on first push.
+- **Pluggable validation** — `Validator` struct (`verify/verifier.go`) with `CosignVerifier` and `VulnerabilityChecker` interfaces. When Validator is nil on the reconciler, validation is entirely skipped.
 
 ### CRD Status Types
 
@@ -185,13 +192,13 @@ ImageSyncStatus
 ├── LastSyncTime, NextSyncTime
 ├── Conditions: []metav1.Condition (Ready, Syncing)
 ├── Images: []ImageSyncStatusImage
-│   └── Tags: []TagSyncStatus (tag, synced, sourceDigest, lastSyncTime, error)
+│   └── Tags: []TagSyncStatus (tag, synced, sourceDigest, lastSyncTime, error, verified, validationError)
 ├── TotalImages, SyncedImages, FailedImages
 ```
 
 ### Events Emitted
 
-`RepoEnsured`, `ImageSynced`, `ImageSkipped`, `SyncFailed`, `SyncComplete`
+`RepoEnsured`, `ImageSynced`, `ImageSkipped`, `ImageVerified`, `ValidationFailed`, `SyncFailed`, `SyncComplete`
 
 ### Prometheus Metrics
 
@@ -204,6 +211,8 @@ All custom metrics use the `portage_` prefix. Defined in `internal/controller/me
 | `portage_images_copied_total` | Counter |
 | `portage_images_skipped_total` | Counter |
 | `portage_images_failed_total` | Counter |
+| `portage_images_verified_total` | Counter (name, namespace) |
+| `portage_images_validation_failed_total` | Counter (name, namespace, gate) |
 | `portage_image_info` | Gauge |
 
 ## Testing

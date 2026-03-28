@@ -162,6 +162,14 @@ spec:
         name: dest-creds
     repositoryPrefix: mirror       # Optional: images land under mirror/<name>
   createDestinationRepos: true     # Optional: auto-create ECR repos
+  validation:                      # Optional: pre-sync validation gates
+    cosign:
+      enabled: true
+      publicKey: "..."             # PEM-encoded cosign public key
+    vulnerabilityGate:
+      enabled: true
+      maxSeverity: high            # Block on high + critical
+      requireCveReport: true       # Block if no SARIF report found (default)
   images:
     - name: go
       tags: ["latest", "1.22"]
@@ -190,6 +198,129 @@ kubectl annotate imagesync <name> portager.portager.io/sync-now=true
 ```
 
 The controller removes the annotation after processing.
+
+---
+
+## Pre-Sync Validation
+
+Optional validation gates can be configured to verify source images before syncing. When enabled, images that fail validation are **not copied** and are reported as failures.
+
+### Cosign Signature Verification
+
+Verify that source images are signed with [cosign](https://github.com/sigstore/cosign) before syncing. Supports key-based and keyless (Fulcio) verification.
+
+**Key-based verification:**
+
+```yaml
+spec:
+  validation:
+    cosign:
+      enabled: true
+      publicKey: |
+        -----BEGIN PUBLIC KEY-----
+        MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+        -----END PUBLIC KEY-----
+```
+
+**Keyless verification (Fulcio/Rekor):**
+
+```yaml
+spec:
+  validation:
+    cosign:
+      enabled: true
+      keylessIssuer: "https://token.actions.githubusercontent.com"
+```
+
+> **Note:** Keyless verification requires network access to Fulcio and Rekor transparency log services. It will not work in air-gapped environments — use key-based verification instead.
+
+> **Note:** Keyless verification downloads TUF trust metadata and caches it on disk. The Helm chart handles this automatically (writable `/tmp` volume + `TUF_ROOT` env var). For Kustomize or manual deployments, ensure the controller pod has a writable directory and set the `TUF_ROOT` environment variable to point to it (e.g., `TUF_ROOT=/tmp/.sigstore`). Key-based verification does not require this.
+
+### Vulnerability Gate
+
+Block images that have vulnerability findings at or above a severity threshold. Portager reads **existing** SARIF-formatted scan reports attached as OCI attestations (referrers) to the source image. It does **not** execute vulnerability scans — your CI pipeline or registry must attach the report first.
+
+**Prerequisite:** The source image must have a SARIF vulnerability report attached as an OCI referrer with artifact type `application/sarif+json`. Tools like [Trivy](https://aquasecurity.github.io/trivy/) can scan and attach reports:
+
+```bash
+# Scan image and attach SARIF report as an OCI referrer
+trivy image --format sarif --output report.sarif myregistry/myimage:v1.0
+oras attach myregistry/myimage:v1.0 --artifact-type application/sarif+json report.sarif
+```
+
+```yaml
+spec:
+  validation:
+    vulnerabilityGate:
+      enabled: true
+      maxSeverity: high            # Block on high and critical findings (default: critical)
+      requireCveReport: true       # Block sync if no scan report is found (default: true)
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `false` | Activate vulnerability gate checking |
+| `maxSeverity` | `string` | `critical` | Severity threshold: `critical`, `high`, `medium`, or `low` |
+| `requireCveReport` | `bool` | `true` | When `true`, block sync if no SARIF vulnerability report is found attached to the source image. Set to `false` to allow images without reports. |
+
+**Severity ordering:** `critical > high > medium > low`. Setting `maxSeverity: high` blocks findings rated high or critical.
+
+**How severity is determined:** Portager resolves each SARIF finding's severity using the most specific data available:
+
+1. **CVSS score** (from `rule.properties.security-severity`) — mapped as: critical (≥9.0), high (≥7.0), medium (≥4.0), low (<4.0)
+2. **Rule default level** (from `rule.defaultConfiguration.level`) — mapped as: error→high, warning→medium, note→low
+3. **Result level** (from `result.level`) — same mapping as above
+
+When a finding exceeds the threshold, the error message lists the specific CVE IDs and their resolved severities, e.g.:
+
+```
+vulnerability gate: 2 finding(s) at or above high severity: CVE-2024-001 (critical), CVE-2024-002 (high)
+```
+
+This appears in the `ValidationFailed` event and in `.status.images[].tags[].validationError`.
+
+**Behavior:**
+
+| Scenario | Result |
+|---|---|
+| SARIF report found, all findings below threshold | Sync proceeds |
+| SARIF report found, findings at or above threshold | Sync blocked, `ValidationFailed` event with CVE list |
+| No SARIF report, `requireCveReport: true` (default) | Sync blocked |
+| No SARIF report, `requireCveReport: false` | Sync proceeds |
+| Non-SARIF referrer attached | Skipped (no error) |
+
+### Combined Example
+
+```yaml
+spec:
+  validation:
+    cosign:
+      enabled: true
+      publicKey: |
+        -----BEGIN PUBLIC KEY-----
+        MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+        -----END PUBLIC KEY-----
+    vulnerabilityGate:
+      enabled: true
+      maxSeverity: high
+      requireCveReport: true
+```
+
+When both gates are enabled, cosign verification runs first. If it fails, the vulnerability gate is skipped. The `ValidationFailed` event and `.status.images[].tags[].validationError` field indicate which gate failed and why.
+
+### Events
+
+| Event | Type | Description |
+|---|---|---|
+| `ImageVerified` | Normal | Image passed all validation gates |
+| `ValidationFailed` | Warning | Image failed a validation gate (details in message) |
+
+### Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| `portage_images_verified_total` | Counter | name, namespace |
+| `portage_images_validation_failed_total` | Counter | name, namespace, gate |
 
 ---
 
