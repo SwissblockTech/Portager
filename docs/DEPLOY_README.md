@@ -379,9 +379,7 @@ metadata:
 spec:
   schedule: "@every 6h"
   source:
-    # Pull from a GAR registry using Workload Identity
     registry: us-central1-docker.pkg.dev/<SOURCE_PROJECT>/source-repo
-    authMethod: gar
   destination:
     # Push to a GAR registry using Workload Identity
     registry: us-central1-docker.pkg.dev/<PROJECT_ID>/mirror
@@ -531,7 +529,7 @@ Images without an SBOM are blocked. See [Configuration — SBOM Gate](CONFIGURAT
 
 The reconcile loop for an ImageSync with `method: ecr` and `createDestinationRepos: true`:
 
-```
+```md
  1. Fetch ImageSync CR from the API server
  2. Validate the cron schedule expression
  3. Check for sync-now annotation (remove if present, bypass schedule)
@@ -561,6 +559,7 @@ The reconcile loop for an ImageSync with `method: ecr` and `createDestinationRep
 ```
 
 The status on each ImageSync shows:
+
 - `lastSyncTime` / `nextSyncTime` — when it last ran and will run again
 - `conditions` — `Ready=True/SyncSucceeded` or `Ready=False/SyncFailed`
 - `images[].tags[].sourceDigest` — the digest used for comparison

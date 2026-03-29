@@ -430,14 +430,9 @@ func (r *ImageSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // buildSourceAuth returns an Authenticator for the source registry.
-// If authMethod is "gar", uses ADC/Workload Identity for Google Artifact Registry.
 // If authSecretRef is set, uses Secret-based auth.
 // Otherwise returns anonymous (for public registries).
 func (r *ImageSyncReconciler) buildSourceAuth(is *portagerv1alpha1.ImageSync) auth.Authenticator {
-	if is.Spec.Source.AuthMethod == "gar" {
-		return &auth.GARAuthenticator{Registry: is.Spec.Source.Registry}
-	}
-
 	if is.Spec.Source.AuthSecretRef == nil {
 		return &auth.AnonymousAuthenticator{}
 	}

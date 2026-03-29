@@ -11,13 +11,12 @@ spec:
   source:
     # Pull from a private GAR repository using Workload Identity (ADC).
     registry: us-central1-docker.pkg.dev/my-project/source-repo
-    authMethod: gar
   destination:
     # Push to a GAR repository using Workload Identity (ADC).
     registry: us-central1-docker.pkg.dev/my-project/mirror
     auth:
       method: gar
-    repositoryPrefix: ""  # images land directly under mirror/
+    # repositoryPrefix: ""  # images land directly under mirror/
   images:
     - name: myapp
       tags:

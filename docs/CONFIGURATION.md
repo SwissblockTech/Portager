@@ -379,7 +379,7 @@ spec:
 
 > **Note:** Keyless verification requires network access to Fulcio and Rekor transparency log services. It will not work in air-gapped environments — use key-based verification instead.
 
-> **Note:** Keyless verification downloads TUF trust metadata and caches it on disk. The Helm chart handles this automatically (writable `/tmp` volume + `TUF_ROOT` env var). For Kustomize or manual deployments, ensure the controller pod has a writable directory and set the `TUF_ROOT` environment variable to point to it (e.g., `TUF_ROOT=/tmp/.sigstore`). Key-based verification does not require this.
+> __Note:__ Keyless verification downloads TUF trust metadata and caches it on disk. The Helm chart handles this automatically (writable `/tmp` volume + `TUF_ROOT` env var). For Kustomize or manual deployments, ensure the controller pod has a writable directory and set the `TUF_ROOT` environment variable to point to it (e.g., `TUF_ROOT=/tmp/.sigstore`). Key-based verification does not require this.
 
 ### Vulnerability Gate
 
@@ -418,7 +418,7 @@ spec:
 
 When a finding exceeds the threshold, the error message lists the specific CVE IDs and their resolved severities, e.g.:
 
-```
+```md
 vulnerability gate: 2 finding(s) at or above high severity: CVE-2024-001 (critical), CVE-2024-002 (high)
 ```
 
@@ -501,9 +501,11 @@ When multiple gates are enabled, they run in order: cosign → vulnerability →
 When `networkPolicy.enabled` is set to `true`, a Kubernetes `NetworkPolicy` is created that restricts traffic to and from the controller pod:
 
 **Ingress (allowed):**
+
 - TCP 8443 (metrics) from namespaces matching `networkPolicy.metrics.namespaceSelector` labels (default: `kubernetes.io/metadata.name: monitoring`)
 
 **Egress (allowed):**
+
 - UDP/TCP 53 to any (DNS resolution)
 - TCP 443 to any (HTTPS to OCI registries), optionally restricted via `networkPolicy.egress.registryCIDRs`
 - TCP 6443 to any (Kubernetes API server), optionally restricted via `networkPolicy.egress.apiServerCIDR`

@@ -43,14 +43,6 @@ type SourceConfig struct {
 	// Omit for public registries or when using authMethod.
 	// +optional
 	AuthSecretRef *SecretReference `json:"authSecretRef,omitempty"`
-
-	// authMethod specifies the authentication strategy for the source registry.
-	// "gar" uses Application Default Credentials / GKE Workload Identity for
-	// Google Artifact Registry. When unset, anonymous or secret-based auth is
-	// used depending on whether authSecretRef is set.
-	// +kubebuilder:validation:Enum=gar
-	// +optional
-	AuthMethod string `json:"authMethod,omitempty"`
 }
 
 // AuthConfig defines how the controller authenticates to the destination registry.
