@@ -160,7 +160,7 @@ spec:
                   authSecretRef:
                     description: |-
                       authSecretRef references a kubernetes.io/dockerconfigjson Secret for pull authentication.
-                      Omit for public registries or when using authMethod.
+                      Omit for public registries
                     properties:
                       name:
                         description: name of the Secret

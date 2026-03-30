@@ -370,11 +370,11 @@ helm install portager oci://ghcr.io/jarodr47/portager/charts/portager \
 ### 6. Apply a GAR ImageSync
 
 ```yaml
-# gar-to-gar.yaml
+# sync-to-gar.yaml
 apiVersion: portager.portager.io/v1alpha1
 kind: ImageSync
 metadata:
-  name: gar-to-gar
+  name: sync-to-gar
   namespace: default
 spec:
   schedule: "@every 6h"
@@ -393,18 +393,18 @@ spec:
 ```
 
 ```bash
-kubectl apply -f gar-to-gar.yaml
+kubectl apply -f sync-to-gar.yaml
 ```
 
 ### 7. Watch the reconciliation
 
 ```bash
-kubectl describe imagesync gar-to-gar
+kubectl describe imagesync sync-to-gar
 # Events:
 #   ImageSynced  - Synced us-central1-docker.pkg.dev/.../myapp:latest -> mirror (digest: sha256:...)
 #   SyncComplete - Sync complete: 2 synced, 0 failed, 2 total
 
-kubectl get imagesync gar-to-gar -o jsonpath='{.status}' | jq .
+kubectl get imagesync sync-to-gar -o jsonpath='{.status}' | jq .
 ```
 
 ### 8. Cleanup

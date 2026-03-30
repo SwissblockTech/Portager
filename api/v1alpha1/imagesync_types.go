@@ -40,7 +40,7 @@ type SourceConfig struct {
 	Registry string `json:"registry"`
 
 	// authSecretRef references a kubernetes.io/dockerconfigjson Secret for pull authentication.
-	// Omit for public registries or when using authMethod.
+	// Omit for public registries
 	// +optional
 	AuthSecretRef *SecretReference `json:"authSecretRef,omitempty"`
 }

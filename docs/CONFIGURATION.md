@@ -57,7 +57,7 @@ Portager supports multiple authentication strategies through a pluggable interfa
 
 | Method | Use Case | Configuration |
 |---|---|---|
-| **Anonymous (source)** | Public source registries (Docker Hub, Quay, GHCR public) | Omit `spec.source.authSecretRef` and `spec.source.authMethod` |
+| **Anonymous (source)** | Public source registries (Docker Hub, Quay, GHCR public) | Omit `spec.source.authSecretRef` |
 | **Anonymous (destination, explicit)** | Public/local registries with no auth | `spec.destination.auth.method: anonymous` |
 | **Anonymous (destination, legacy)** | Backward-compatible anonymous auth | `spec.destination.auth.method: secret` with no `secretRef` |
 | **Kubernetes Secret** | Any registry with username/password or token auth | `spec.source.authSecretRef` or `spec.destination.auth.secretRef` referencing a `kubernetes.io/dockerconfigjson` Secret |
@@ -65,7 +65,7 @@ Portager supports multiple authentication strategies through a pluggable interfa
 | **GAR (Workload Identity / ADC)** | Google Artifact Registry source | `spec.source.authMethod: gar` — uses Application Default Credentials |
 | **GAR (Workload Identity / ADC)** | Google Artifact Registry destination | `spec.destination.auth.method: gar` — uses Application Default Credentials |
 
-> **Note:** For source registries, anonymous auth is the default when `authSecretRef` is omitted and `authMethod` is unset. For destination registries, `auth.method` is required by the CRD. Use `method: anonymous` for unauthenticated destinations (recommended). `method: secret` without a `secretRef` still works for backward compatibility but `method: anonymous` is the preferred explicit approach.
+> **Note:** For source registries, anonymous auth is the default when `authSecretRef` is omitted. For destination registries, `auth.method` is required by the CRD. Use `method: anonymous` for unauthenticated destinations (recommended). `method: secret` without a `secretRef` still works for backward compatibility but `method: anonymous` is the preferred explicit approach.
 
 ### AWS Credential Strategies
 
