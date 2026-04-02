@@ -343,11 +343,6 @@ gcloud iam service-accounts create portager \
 gcloud projects add-iam-policy-binding <PROJECT_ID> \
   --member="serviceAccount:portager@<PROJECT_ID>.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
-
-# If also pulling from a private GAR source, add reader on the source project:
-# gcloud projects add-iam-policy-binding <SOURCE_PROJECT_ID> \
-#   --member="serviceAccount:portager@<PROJECT_ID>.iam.gserviceaccount.com" \
-#   --role="roles/artifactregistry.reader"
 ```
 
 ### 4. Allow the Kubernetes service account to impersonate the GCP service account
@@ -452,18 +447,6 @@ spec:
     authSecretRef:
       name: chainguard-pull-secret
 ```
-
-**Google Artifact Registry with Workload Identity:**
-
-For private GAR source registries, use `authMethod: gar` instead of a Secret. No `authSecretRef` is needed — credentials come from ADC/Workload Identity:
-
-```yaml
-spec:
-  source:
-    registry: us-central1-docker.pkg.dev/my-project/my-repo
-    authMethod: gar
-```
-
 ---
 
 ## Pre-Sync Validation
@@ -573,7 +556,7 @@ See `config/samples/` for ready-to-use examples:
 
 - `portager_v1alpha1_imagesync.yaml` — Docker Hub to local registry (no auth)
 - `portager_v1alpha1_imagesync_ecr.yaml` — Chainguard to ECR with IRSA and repo creation
-- `portager_v1alpha1_imagesync_gar.yaml` — GAR to GAR with GKE Workload Identity
+- `portager_v1alpha1_imagesync_gar.yaml` — Public registry to GAR with GKE Workload Identity
 
 ---
 

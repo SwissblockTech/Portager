@@ -98,11 +98,11 @@ GAR_REGISTRY ?= us-central1-docker.pkg.dev/my-project/portager-e2e-test
 
 .PHONY: test-e2e-gar
 test-e2e-gar: ## Run GAR e2e tests (requires ADC credentials and a pre-existing GAR repository)
-	go test -tags=e2e_gar ./internal/controller/ -v -run TestGAR_E2E
+	GAR_REGISTRY=$(GAR_REGISTRY) go test -tags=e2e_gar ./internal/controller/ -v -run TestGAR_E2E
 
 .PHONY: cleanup-e2e-gar
 cleanup-e2e-gar: ## Clean up images created by GAR e2e tests
-	go test -tags=e2e_gar ./internal/controller/ -v -run TestGAR_E2E_Cleanup
+	GAR_REGISTRY=$(GAR_REGISTRY) go test -tags=e2e_gar ./internal/controller/ -v -run TestGAR_E2E_Cleanup
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

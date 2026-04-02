@@ -52,9 +52,8 @@ func (g *GARAuthenticator) Authenticate(ctx context.Context) (authn.Authenticato
 //
 //	"us-central1-docker.pkg.dev"                    → "us-central1-docker.pkg.dev"
 //	"us-central1-docker.pkg.dev/my-project/my-repo" → "us-central1-docker.pkg.dev"
+
 func garHost(registry string) string {
-	if idx := strings.IndexByte(registry, '/'); idx != -1 {
-		return registry[:idx]
-	}
-	return registry
+	host, _, _ := strings.Cut(registry, "/")
+	return host
 }

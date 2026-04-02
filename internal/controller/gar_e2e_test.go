@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -16,7 +17,12 @@ import (
 	"github.com/jarodr47/portager/internal/controller/sync"
 )
 
-// garRegistry is the GAR repository path used as the destination for e2e tests.
+// garTestImage is the image name used as the source for e2e tests.
+const garTestImage = "alpine"
+
+// garRegistryFromEnv returns the GAR registry from the GAR_REGISTRY environment variable.
+// It fails the test immediately if the variable is not set.
+//
 // Format: {region}-docker.pkg.dev/{project}/{repository}
 //
 // Prerequisites before running:
@@ -28,14 +34,19 @@ import (
 //
 // Run with:
 //
-//	go test -tags=e2e_gar ./internal/controller/ -v -run TestGAR_E2E
-const (
-	garRegistry  = "{region}-docker.pkg.dev/{project}/{repository}"
-	garTestImage = "alpine"
-)
+//	GAR_REGISTRY=us-central1-docker.pkg.dev/my-project/my-repo make test-e2e-gar
+func garRegistryFromEnv(t *testing.T) string {
+	t.Helper()
+	registry := os.Getenv("GAR_REGISTRY")
+	if registry == "" {
+		t.Fatal("GAR_REGISTRY environment variable must be set (e.g. us-central1-docker.pkg.dev/my-project/my-repo)")
+	}
+	return registry
+}
 
 func TestGAR_E2E(t *testing.T) {
 	ctx := context.Background()
+	garRegistry := garRegistryFromEnv(t)
 
 	authenticator := &auth.GARAuthenticator{Registry: garRegistry}
 
@@ -136,6 +147,7 @@ func TestGAR_E2E(t *testing.T) {
 
 func TestGAR_E2E_Cleanup(t *testing.T) {
 	ctx := context.Background()
+	garRegistry := garRegistryFromEnv(t)
 
 	authenticator := &auth.GARAuthenticator{Registry: garRegistry}
 	authnResult, err := authenticator.Authenticate(ctx)
